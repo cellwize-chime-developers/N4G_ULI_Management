@@ -7,21 +7,20 @@ import pandas as pd
 import time
 import math
 import json
+import numpy as np
+
 
 logger.info(f"pandas version is " + pd.__version__)
-logger.info(f"json version is " + json.__version__)
+logger.info(f"numpy version is " + np.__version__)
 
 # STATIC PARAMETER DEFINITIONS
 kpiList = ["DEV_SGNB_ADD_SUCC_RT", "DEV_SGNB_ADD_ATTEMPTS"]
 
-moParameters = {'NSADCMGMTCONFIG': [{"place": "attributes",
-                                     "parameter": "LOCALCELLID"
-                                     },
-                                    {"place": "attributes",
-                                     "parameter": "UPPERLAYERINDICATIONSWITCH"
-                                     }
-                                    ]}
+moParameters = {'SIB': [{"place": "attributes",
+                         "parameter": "primPlmnUpperLayerIndicationR15"
+                         }]}
 
+debugMode = True if context.get('DEBUG_MODE') == "T" else False
 batchSize = int(context.get('BATCH_SIZE'))
 backLogDuration = context.get('BACKLOG_DURATION')
 targetCluster = context.get('NAAS_CLUSTER')
@@ -30,6 +29,7 @@ attThreshold = int(context.get('MIN_REQ_ATTEMPT_THRESHOLD'))
 maxNumberOfAction = int(context.get('ACTION_LIMIT'))
 work_items = []
 
+logger.info(f"UI VARIABLES: DEBUG_MODE IS {debugMode}")
 logger.info(f"UI VARIABLES: NAAS_CLUSTER IS {targetCluster}")
 logger.info(f"UI VARIABLES: PROVISION_MODE IS {context.get('PROVISION_MODE')}")
 logger.info(f"UI VARIABLES: BACKLOG_DURATION IS {backLogDuration}")
@@ -40,7 +40,6 @@ logger.info(f"UI VARIABLES: ACTION_LIMIT IS {maxNumberOfAction}")
 
 
 # COMMON FUNCTIONS
-
 def generateReport(dataFrame, prefix, limit):
     logger.info(f'#{prefix}#{"#".join(dataFrame.keys().tolist())}')
 
@@ -54,6 +53,7 @@ def generateReport(dataFrame, prefix, limit):
         logger.info(f'#{prefix}#{"#".join(eachRow)}')
 
         if rowCounter == limit:
+            logger.info("Report is truncated due to max report size")
             break
 
 
@@ -62,7 +62,8 @@ def elapsedTimeMeasure(method):
         ts = time.time()
         result = method(*args, **kw)
         te = time.time()
-        logger.info(f"Elapsed time for {method.__name__} is {round(te - ts, 2)} sec")
+        if debugMode:
+            logger.info(f"Elapsed time for {method.__name__} is {round(te - ts, 2)} sec")
         return result
 
     return timed
@@ -86,8 +87,9 @@ def joinTwoListWithMultipleAttribute(lst1, lst2, left_on, right_on):
 
 
 def printResponseDetails(page_info):
-    logger.info(f"Total element size is {page_info['numberOfElements']}")
-    logger.info(f"Total required request count is {page_info['numberOfPages']}")
+    if debugMode:
+        logger.info(f"Total element size is {page_info['numberOfElements']}")
+        logger.info(f"Total required request count is {page_info['numberOfPages']}")
 
 
 def getNextPageUrl(page_info):
@@ -136,8 +138,8 @@ def populateCellMoList(lst, jsonFmt, params):
                 dicts[eachParam.get('parameter')] = None
 
         lst.append(cellMo(guid=eachMo['guid'],
-                          eNodeBId=eachMo.get('meta').get('ENODEBID'),
-                          LocalCellId=eachMo.get('attributes').get('LOCALCELLID'),
+                          eNodeBId=eachMo.get('attributes').get('eNodeBId'),
+                          LocalCellId=eachMo.get('attributes').get('lcrId'),
                           uid=eachMo['uid'],
                           parent_uid=eachMo['parent_uid'],
                           paramSet=dicts))
@@ -178,7 +180,8 @@ def getNaasMoFromURL(url):
         each_str = each.split("=")
         paramSet[each_str[0]] = each_str[1]
 
-    logger.info(paramSet)
+    if debugMode:
+        logger.info(paramSet)
     response = naas.api.mos.find_mos(params=paramSet).body
     return response
 
@@ -191,22 +194,26 @@ def getMosFromNaas(moName, baseMoList):
     except:
         desiredParams = {}
 
-    if moName == "CELL":
+    if debugMode:
+        logger.info(f"{moName} will be fetched")
+    if moName == "LNCEL":
         criteria = "guid"
+        criteriaAlias = "guid"
     else:
-        criteria = "parent_uid"
+        criteria = "uid"
+        criteriaAlias = "parent_uid"
 
     criteria_values_in_list = list(set([f"\"{baseMoList.loc[ii, criteria]}\"" for ii in range(len(baseMoList))]))
     criteria_values = ",".join(criteria_values_in_list)
     criteria_values = criteria_values[1:-1]
 
     post_message = {"class": f"{moName}",
-                    criteria: [criteria_values]}
+                    criteriaAlias: [criteria_values]}
 
     post_message = str(post_message).replace("'", "\"")
     response = naas.api.mos.find_mos(body=json.loads(post_message), params={'links': 'false'}).body
 
-    if moName == "CELL":
+    if moName == "LNCEL":
         populateCellMoList(lst=inst_list, jsonFmt=response, params=desiredParams)
     else:
         populateChildMoList(lst=inst_list, jsonFmt=response, params=desiredParams)
@@ -220,7 +227,7 @@ def getMosFromNaas(moName, baseMoList):
 
         response = getNaasMoFromURL(url=nextPageInfo['URL'])
 
-        if moName == "CELL":
+        if moName == "LNCEL":
             populateCellMoList(lst=inst_list, jsonFmt=response, params=desiredParams)
         else:
             populateChildMoList(lst=inst_list, jsonFmt=response, params=desiredParams)
@@ -228,7 +235,7 @@ def getMosFromNaas(moName, baseMoList):
         nextPageInfo = getNextPageUrl(page_info=response['pagination'])
 
     if len(inst_list) == 0:
-        if moName == "CELL":
+        if moName == "LNCEL":
             inst_list.append(cellMo(guid=None, eNodeBId=None, LocalCellId=None, uid=None, parent_uid=None, paramSet={}))
         else:
             inst_list.append(childMo(childMo_uid=None, childMo_parent_uid=None, paramSet={}))
@@ -246,7 +253,8 @@ def getNaasFromURL(url):
         each_str = each.split("=")
         paramSet[each_str[0]] = each_str[1]
 
-    logger.info(paramSet)
+    if debugMode:
+        logger.info(paramSet)
     response = naas.api.clusters.get_cluster_cells(targetCluster, params=paramSet).body
     return response
 
@@ -264,7 +272,6 @@ def populateCellList(lst, jsonFmt):
 def getTargetCells():
     cellList = []
     response = naas.api.clusters.get_cluster_cells(targetCluster, params={'fields': '_id,name,guid'}).body
-    # logger.info(response)
 
     populateCellList(lst=cellList, jsonFmt=response)
 
@@ -280,11 +287,6 @@ def getTargetCells():
         nextPageInfo = getNextPageUrl(page_info=response['pagination'])
 
     return convertToPdFrame(cellList)
-
-
-def extractLocalCellIdInfo(dataFrame):
-    for ii in range(len(dataFrame)):
-        dataFrame.loc[ii, 'childMo_LocalCellId'] = dataFrame.loc[ii, 'paramSet'].get('LOCALCELLID')
 
 
 # XPAAS RELATED OBJECTS & METHODS
@@ -307,7 +309,8 @@ def populatePmList(lst, jsonFmt):
             dataPoint = eachCellObj['data_points']
             if len(dataPoint) != 1:
                 logger.info(f"populatePmList.dataPoint.size is {len(dataPoint)}")
-                logger.info(dataPoint)
+                if debugMode:
+                    logger.info(dataPoint)
 
             dataPoint_ = dataPoint[0]
             try:
@@ -337,7 +340,8 @@ def getTargetPmData(cellList):
     logger.info(f"Required batch count is {batchCount} to get {len(cellList)} cell data")
 
     for ii in range(batchCount):
-        logger.info(f"PM Set Batch {ii + 1} is procedeed")
+        if debugMode:
+            logger.info(f"PM Set Batch {ii + 1} is procedeed")
 
         minIdx = int(batchSize * ii)
         maxIdx = min(int(batchSize * (ii + 1)), len(cellList))
@@ -354,7 +358,6 @@ def getTargetPmData(cellList):
         response = xpaas.api.kpis.get_kpi_data(body=json.loads(post_message), params={'per_page': batchSize}).body
         populatePmList(pmList, response)
 
-        # TODO: NOT TESTED PART
         pagination = response['pagination']
         printResponseDetails(page_info=pagination)
         nextPageInfo = getNextPageUrl(page_info=pagination)
@@ -370,6 +373,7 @@ def getTargetPmData(cellList):
 
 stateTable = {'KPI_DATA_IS_NOT_AVILABLE': 0, 'KPI_DATA_IS_NOT_ENOUGH': 0, 'GOOD_STATE': 0, 'BAD_STATE': 0}
 actionTable = {'SET_TO_1': 0, 'SET_TO_0': 0}
+listOfMosWithAction = []
 
 
 def getStatesAccordingToPM(dataFrame):
@@ -383,26 +387,38 @@ def getStatesAccordingToPM(dataFrame):
             DEV_SGNB_ADD_SUCC_RT = None
             DEV_SGNB_ADD_ATTEMPTS = None
 
-        # TODO: NOT TESTED PART
+        try:
+            primPlmnUpperLayerIndicationR15 = str(dataFrame.loc[idx, 'paramSet'].get('primPlmnUpperLayerIndicationR15'))
+        except:
+            dataFrame.loc[idx, 'PM_STATE'] = "NOT_CHECKED"
+            dataFrame.loc[idx, 'DECISION'] = "MISSING_CM"
+            continue
+
         if (int(DEV_SGNB_ADD_ATTEMPTS) if DEV_SGNB_ADD_ATTEMPTS is not None else None) == 0:
             dataFrame.loc[idx, 'PM_STATE'] = "KPI_DATA_IS_NOT_ENOUGH"
-            # dataFrame.loc[idx, 'DECISION'] = 'NONE' -- CHANGED AT 07-OCT-2022
+            # dataFrame.loc[idx, 'DECISION'] = 'NONE'
             stateTable['KPI_DATA_IS_NOT_ENOUGH'] = stateTable['KPI_DATA_IS_NOT_ENOUGH'] + 1
 
-            # ADDED AT 07-OCT-2022
-            if str(dataFrame.loc[idx, 'paramSet'].get('UPPERLAYERINDICATIONSWITCH')) == '0':
+            if primPlmnUpperLayerIndicationR15 == '0':
                 dataFrame.loc[idx, 'DECISION'] = 'ALREADY-DISABLED'
             else:
                 dataFrame.loc[idx, 'DECISION'] = 'DISABLED-BY-DEV'
                 if action_count < maxNumberOfAction or maxNumberOfAction == -1:
-                    work_items.append({
-                        'type': 'CHANGE_SPECIFIC_PARAMETER',
-                        '_moId': dataFrame.loc[idx, 'childMo_uid'],
-                        'parameterName': 'UPPERLAYERINDICATIONSWITCH',
-                        'value': "0"
-                    })
-                    action_count = action_count + 1
-                    actionTable['SET_TO_0'] = actionTable['SET_TO_0'] + 1
+
+                    if dataFrame.loc[idx, 'childMo_uid'] not in listOfMosWithAction:
+                        listOfMosWithAction.append(dataFrame.loc[idx, 'childMo_uid'])
+                        work_items.append({
+                            'type': 'CHANGE_SPECIFIC_PARAMETER',
+                            '_moId': dataFrame.loc[idx, 'childMo_uid'],
+                            'parameterName': 'primPlmnUpperLayerIndicationR15',
+                            'value': "0"
+                        })
+
+                        action_count = action_count + 1
+                        actionTable['SET_TO_0'] = actionTable['SET_TO_0'] + 1
+
+                    else:
+                        dataFrame.loc[idx, 'DECISION'] = 'DUPLICATED_MO'
 
         elif DEV_SGNB_ADD_SUCC_RT is None or DEV_SGNB_ADD_ATTEMPTS is None:
             dataFrame.loc[idx, 'PM_STATE'] = "KPI_DATA_IS_NOT_AVILABLE"
@@ -411,62 +427,79 @@ def getStatesAccordingToPM(dataFrame):
 
         elif DEV_SGNB_ADD_ATTEMPTS < attThreshold:
             dataFrame.loc[idx, 'PM_STATE'] = "KPI_DATA_IS_NOT_ENOUGH"
-            # dataFrame.loc[idx, 'DECISION'] = 'NONE' -- CHANGED AT 07-OCT-2022
+            # dataFrame.loc[idx, 'DECISION'] = 'NONE'
             stateTable['KPI_DATA_IS_NOT_ENOUGH'] = stateTable['KPI_DATA_IS_NOT_ENOUGH'] + 1
 
-            # ADDED AT 07-OCT-2022
-            if str(dataFrame.loc[idx, 'paramSet'].get('UPPERLAYERINDICATIONSWITCH')) == '0':
+            if primPlmnUpperLayerIndicationR15 == '0':
                 dataFrame.loc[idx, 'DECISION'] = 'ALREADY-DISABLED'
             else:
                 dataFrame.loc[idx, 'DECISION'] = 'DISABLED-BY-DEV'
                 if action_count < maxNumberOfAction or maxNumberOfAction == -1:
-                    work_items.append({
-                        'type': 'CHANGE_SPECIFIC_PARAMETER',
-                        '_moId': dataFrame.loc[idx, 'childMo_uid'],
-                        'parameterName': 'UPPERLAYERINDICATIONSWITCH',
-                        'value': "0"
-                    })
-                    action_count = action_count + 1
-                    actionTable['SET_TO_0'] = actionTable['SET_TO_0'] + 1
+                    if dataFrame.loc[idx, 'childMo_uid'] not in listOfMosWithAction:
+                        listOfMosWithAction.append(dataFrame.loc[idx, 'childMo_uid'])
+                        work_items.append({
+                            'type': 'CHANGE_SPECIFIC_PARAMETER',
+                            '_moId': dataFrame.loc[idx, 'childMo_uid'],
+                            'parameterName': 'primPlmnUpperLayerIndicationR15',
+                            'value': "0"
+                        })
+
+                        action_count = action_count + 1
+                        actionTable['SET_TO_0'] = actionTable['SET_TO_0'] + 1
+
+                    else:
+                        dataFrame.loc[idx, 'DECISION'] = 'DUPLICATED_MO'
 
         elif DEV_SGNB_ADD_SUCC_RT > srThreshold:
             dataFrame.loc[idx, 'PM_STATE'] = "GOOD_STATE"
             stateTable['GOOD_STATE'] = stateTable['GOOD_STATE'] + 1
 
-            if str(dataFrame.loc[idx, 'paramSet'].get('UPPERLAYERINDICATIONSWITCH')) == "1":
+            if primPlmnUpperLayerIndicationR15 == "1":
                 dataFrame.loc[idx, 'DECISION'] = 'ALREADY-ENABLED'
             else:
                 dataFrame.loc[idx, 'DECISION'] = 'ENABLED-BY-DEV'
                 if action_count < maxNumberOfAction or maxNumberOfAction == -1:
-                    actionTable['SET_TO_1'] = actionTable['SET_TO_1'] + 1
-                    work_items.append({
-                        'type': 'CHANGE_SPECIFIC_PARAMETER',
-                        '_moId': dataFrame.loc[idx, 'childMo_uid'],
-                        'parameterName': 'UPPERLAYERINDICATIONSWITCH',
-                        'value': "1"
-                    })
-                    action_count = action_count + 1
+                    if dataFrame.loc[idx, 'childMo_uid'] not in listOfMosWithAction:
+                        listOfMosWithAction.append(dataFrame.loc[idx, 'childMo_uid'])
+                        work_items.append({
+                            'type': 'CHANGE_SPECIFIC_PARAMETER',
+                            '_moId': dataFrame.loc[idx, 'childMo_uid'],
+                            'parameterName': 'primPlmnUpperLayerIndicationR15',
+                            'value': "1"
+                        })
+
+                        action_count = action_count + 1
+                        actionTable['SET_TO_1'] = actionTable['SET_TO_1'] + 1
+
+                    else:
+                        dataFrame.loc[idx, 'DECISION'] = 'DUPLICATED_MO'
         else:
             dataFrame.loc[idx, 'PM_STATE'] = "BAD_STATE"
             stateTable['BAD_STATE'] = stateTable['BAD_STATE'] + 1
 
-            if str(dataFrame.loc[idx, 'paramSet'].get('UPPERLAYERINDICATIONSWITCH')) == '0':
+            if primPlmnUpperLayerIndicationR15 == '0':
                 dataFrame.loc[idx, 'DECISION'] = 'ALREADY-DISABLED'
             else:
                 dataFrame.loc[idx, 'DECISION'] = 'DISABLED-BY-DEV'
                 if action_count < maxNumberOfAction or maxNumberOfAction == -1:
-                    work_items.append({
-                        'type': 'CHANGE_SPECIFIC_PARAMETER',
-                        '_moId': dataFrame.loc[idx, 'childMo_uid'],
-                        'parameterName': 'UPPERLAYERINDICATIONSWITCH',
-                        'value': "0"
-                    })
-                    action_count = action_count + 1
-                    actionTable['SET_TO_0'] = actionTable['SET_TO_0'] + 1
+                    if dataFrame.loc[idx, 'childMo_uid'] not in listOfMosWithAction:
+                        listOfMosWithAction.append(dataFrame.loc[idx, 'childMo_uid'])
+                        work_items.append({
+                            'type': 'CHANGE_SPECIFIC_PARAMETER',
+                            '_moId': dataFrame.loc[idx, 'childMo_uid'],
+                            'parameterName': 'primPlmnUpperLayerIndicationR15',
+                            'value': "0"
+                        })
+
+                        action_count = action_count + 1
+                        actionTable['SET_TO_0'] = actionTable['SET_TO_0'] + 1
+
+                    else:
+                        dataFrame.loc[idx, 'DECISION'] = 'DUPLICATED_MO'
 
 
 def main():
-    # PHASE.1 DEFINE REQUIRED PM DATA
+
     post_message = {"description": "SgNB addition attempts",
                     "formulas": [
                         {
@@ -488,7 +521,8 @@ def main():
     post_message = str(post_message).replace("'", "\"")
     response = xpaas.api.kpis.create_kpi(body=json.loads(post_message)).body
 
-    logger.info(f"KPI GENERATION FOR DEV_SGNB_ADD_ATTEMPTS -> {response}")
+    if debugMode:
+        logger.info(f"KPI GENERATION FOR DEV_SGNB_ADD_ATTEMPTS -> {response}")
 
     post_message = {"description": "SgNB addition success ratio",
                     "formulas": [
@@ -499,7 +533,7 @@ def main():
                         },
                         {
                             "draft": "false",
-                            "formula": "100*#SGNB_ADD_COMPL_SUCC/#SGNB_ADD_PREP_ATT",
+                            "formula": "100*#SGNB_ADD_PREP_SUCC/#SGNB_ADD_PREP_ATT",
                             "vendor": "NOKIA"
                         }
                     ],
@@ -511,52 +545,52 @@ def main():
     post_message = str(post_message).replace("'", "\"")
     response = xpaas.api.kpis.create_kpi(body=json.loads(post_message)).body
 
-    logger.info(f"KPI GENERATION FOR DEV_SGNB_ADD_SUCC_RT -> {response}")
+    if debugMode:
+        logger.info(f"KPI GENERATION FOR DEV_SGNB_ADD_SUCC_RT -> {response}")
 
-    # PHASE.2 GET NAAS RELATED DATA
     targetCellList = getTargetCells()
-    # generateReport(dataFrame=targetCellList, prefix="targetCellList_v1", limit=20)
 
-    cellMoList = getMosFromNaas(moName="CELL", baseMoList=targetCellList)
-    # generateReport(dataFrame=cellMoList, prefix="cellMoList", limit=20)
+    cellMoList = getMosFromNaas(moName="LNCEL", baseMoList=targetCellList)
 
-    NsaDcMgmtConfigList = getMosFromNaas(moName="NSADCMGMTCONFIG", baseMoList=cellMoList)
-    extractLocalCellIdInfo(NsaDcMgmtConfigList)
-    # generateReport(dataFrame=NsaDcMgmtConfigList, prefix="NsaDcMgmtConfigList", limit=20)
+    SibList = getMosFromNaas(moName="SIB", baseMoList=cellMoList)
 
     targetCellList = joinTwoListWithSingleAttribute(lst1=targetCellList, lst2=cellMoList, attribute='guid')
     del cellMoList
-    # generateReport(dataFrame=targetCellList, prefix="targetCellList_v2", limit=20)
 
-    targetCellList = joinTwoListWithMultipleAttribute(lst1=targetCellList, lst2=NsaDcMgmtConfigList, left_on=['LocalCellId', 'parent_uid'], right_on=['childMo_LocalCellId', 'childMo_parent_uid'])
-    del NsaDcMgmtConfigList
-    # generateReport(dataFrame=targetCellList, prefix="targetCellList_v3", limit=20)
+    targetCellList = joinTwoListWithMultipleAttribute(lst1=targetCellList, lst2=SibList, left_on=['uid'], right_on=['childMo_parent_uid'])
+    del SibList
 
     kpiDataList = getTargetPmData(targetCellList)
     targetCellList = joinTwoListWithSingleAttribute(lst1=targetCellList, lst2=kpiDataList, attribute='abstractId')
-    # generateReport(dataFrame=targetCellList, prefix="targetCellList_v4", limit=20)
-
     del kpiDataList
+
     getStatesAccordingToPM(targetCellList)
 
-    generateReport(dataFrame=targetCellList, prefix="targetCellList_v4", limit=-1)
+    if not debugMode:
+        filtered_values = np.where((targetCellList['DECISION'] == 'DISABLED-BY-DEV') | (targetCellList['DECISION'] == 'ENABLED-BY-DEV'))
+        targetCellList = targetCellList.loc[filtered_values]
+
+    if len(targetCellList):
+        generateReport(dataFrame=targetCellList, prefix="targetCellList" if debugMode else "actionCellList", limit=4000)
+
     logger.info(actionTable)
     logger.info(stateTable)
 
     if len(work_items) > 0:
-        work_order = {
-            'description': "UPDATING NSADCMGMTCONFIG.UPPERLAYERINDICATIONSWITCH",
-            'mode': context.get('PROVISION_MODE'),
-            'method': 'NON_TRANSACTION',
-            'priority': '1',
-            'trackingId': context.get('TRACKING_ID'),
-            'workItems': work_items
-        }
+        if context.get('PROVISION_MODE') in ["OFFLINE_SIM", "ONLINE_SIM", "OPERATIONAL"]:
+            work_order = {
+                'description': "UPDATING SIB.primPlmnUpperLayerIndicationR15",
+                'mode': context.get('PROVISION_MODE'),
+                'method': 'NON_TRANSACTION',
+                'priority': '1',
+                'trackingId': context.get('TRACKING_ID'),
+                'workItems': work_items
+            }
 
-        logger.info(f"context.get('TRACKING_ID') -> {context.get('TRACKING_ID')}")
-        work_order_res = pgw.api.workorders.send_workorder(body=work_order)
-        # logger.info(work_order_res)
-
+            logger.info(f"context.get('TRACKING_ID') -> {context.get('TRACKING_ID')}")
+            _ = pgw.api.workorders.send_workorder(body=work_order)
+        else:
+            logger.info(f"No PGW due to {context.get('PROVISION_MODE')}")
     else:
         logger.info("No cells meeting criteria for optimization")
 
