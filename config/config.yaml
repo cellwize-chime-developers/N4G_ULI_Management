@@ -4,11 +4,11 @@ application:
     description: N4G ULI Management
     author: Omer Narmanlioglu
   schema:
-    - name: DEBUG_MODE
-      displayName: Debug Mode (F or T)
-      description: Debug Mode (F or T).
-      defaultValue: "F"
-      type: string
+    - name: LOG_LIMIT
+      displayName: LOG_LIMIT
+      description: LOG_LIMIT.
+      defaultValue: 5000
+      type: number
       group: General Settings
     - name: NaaS_IP
       displayName: NaaS URL
