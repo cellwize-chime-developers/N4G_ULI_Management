@@ -42,12 +42,12 @@ if len(AUTH_URL) > 10:
         logger_config.logger.info(f"HEADERS filled")
 
     # Init  clients
-    naas = NaaSApi(api_root_url=NAAS_URL, timeout=60, headers=HEADERS, ssl_verify=CERT_PATH)
+    naas = NaaSApi(api_root_url=NAAS_URL, timeout=180, headers=HEADERS, ssl_verify=CERT_PATH)
     xpaas = XPaaSApi(api_root_url=XPAAS_URL, timeout=60, headers=HEADERS, ssl_verify=CERT_PATH)
     pgw = PGWApi(api_root_url=PGW_URL, timeout=60, headers=HEADERS, ssl_verify=CERT_PATH)
 
 else:
 
-    naas = NaaSApi(api_root_url=NAAS_URL, timeout=60, headers=HEADERS)
+    naas = NaaSApi(api_root_url=NAAS_URL, timeout=180, headers=HEADERS)
     xpaas = XPaaSApi(api_root_url=XPAAS_URL, timeout=60, headers=HEADERS)
     pgw = PGWApi(api_root_url=PGW_URL, timeout=60, headers=HEADERS)
